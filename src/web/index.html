@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>JARVIS — Voice AI Agent</title>
+<style>
+  :root{--bg:#060a14;--panel:#0d1526;--line:#1c2a45;--acc:#3ee6c4;--acc2:#4aa8ff;--warn:#ffb347;--err:#ff5470;--txt:#dbe7ff;--dim:#7b8db0}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:radial-gradient(1200px 600px at 70% -10%,#0e2038 0%,var(--bg) 55%);color:var(--txt);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--line)}
+  .logo{font-weight:800;letter-spacing:3px;font-size:20px;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  #provBadge{font-size:12px;color:var(--dim);border:1px solid var(--line);padding:4px 10px;border-radius:20px;cursor:pointer}
+  #provBadge b{color:var(--acc)}
+  main{display:grid;grid-template-columns:1fr 380px;gap:16px;padding:16px 22px;max-width:1400px;margin:auto}
+  @media(max-width:980px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  /* orb */
+  .orbwrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:26px 0 14px}
+  #orb{width:150px;height:150px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#2affd5 0%,#0a8f7a 45%,#052e28 100%);box-shadow:0 0 40px #0f8,0 0 90px rgba(62,230,196,.25);transition:.3s;position:relative}
+  #orb.listening{animation:pulse 1.1s infinite;background:radial-gradient(circle at 35% 30%,#ffd76a 0%,#b07a10 45%,#3a2a05 100%);box-shadow:0 0 40px #fb0,0 0 90px rgba(255,180,60,.3)}
+  #orb.thinking{animation:spin 2.4s linear infinite;background:radial-gradient(circle at 35% 30%,#7ec8ff 0%,#1a5fa0 45%,#08243d 100%);box-shadow:0 0 40px #4af,0 0 90px rgba(74,168,255,.3)}
+  #orb.speaking{animation:pulse .7s infinite;background:radial-gradient(circle at 35% 30%,#7effc8 0%,#12a06a 45%,#06301f 100%)}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
+  @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+  #statusLine{color:var(--dim);font-size:14px;min-height:20px;text-align:center}
+  .btnrow{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:6px}
+  button{background:#12203a;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:14px;cursor:pointer;transition:.15s}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button.primary{background:linear-gradient(90deg,#0f6,transparent 140%),#123; border-color:var(--acc);color:var(--acc);font-weight:700}
+  button.danger{border-color:var(--err);color:var(--err)}
+  button.active{background:var(--acc);color:#04121a;font-weight:700}
+  /* transcript */
+  #transcript{height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-top:12px;font-size:14px}
+  .msg{padding:8px 12px;border-radius:10px;max-width:92%;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+  .msg.user{align-self:flex-end;background:#173055;border:1px solid #24507f}
+  .msg.ai{align-self:flex-start;background:#122036;border:1px solid var(--line)}
+  .toggle{position:fixed;bottom:18px;right:18px;z-index:50}
+  /* log */
+  #log{height:420px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;display:flex;flex-direction:column;gap:4px}
+  .ev{padding:5px 8px;border-radius:6px;border-left:3px solid var(--line);background:#0a1120;color:var(--dim)}
+  .ev.plan{border-color:var(--acc2)}.ev.thought{border-color:#9b7bff}.ev.action_started{border-color:var(--warn)}
+  .ev.action_result{border-color:var(--acc)}.ev.action_failed,.ev.error,.ev.task_failed{border-color:var(--err);color:#ffb9c6}
+  .ev.replan{border-color:#ff8ac2}.ev.task_done,.ev.final{border-color:var(--acc);color:var(--acc)}
+  h3{font-size:13px;text-transform:uppercase;letter-spacing:2px;color:var(--dim);margin-bottom:10px}
+  input,select{background:#0a1324;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 11px;font-size:14px;width:100%}
+  label{font-size:12px;color:var(--dim);display:block;margin:10px 0 4px}
+  dialog{border:1px solid var(--line);background:var(--panel);color:var(--txt);border-radius:14px;padding:22px;width:min(560px,92vw)}
+  dialog::backdrop{background:rgba(0,0,10,.7)}
+  .provlist{display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;margin-top:10px}
+  .provitem{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:9px;cursor:pointer;font-size:13px}
+  .provitem.sel{border-color:var(--acc);background:#0d2a24}
+  .provitem small{color:var(--dim);display:block}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  hr{border:none;border-top:1px solid var(--line);margin:14px 0}
+  .pill{font-size:10px;padding:2px 8px;border-radius:10px;background:#1c2a45;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">◉ JARVIS · VOICE AGENT</div>
+  <div id="provBadge" onclick="openSettings()">⚙ <b id="badgeName">Ollama</b> · <span id="badgeModel">llama3.1</span></div>
+</header>
+
+<main>
+  <!-- LEFT: voice + chat -->
+  <section class="card">
+    <div class="orbwrap">
+      <div id="orb"></div>
+      <div id="statusLine">Press the mic (or spacebar) and just speak your command.</div>
+      <div class="btnrow">
+        <button id="micBtn" class="primary">🎤 Start Listening</button>
+        <button id="handsfreeBtn">🙌 Hands-free: OFF</button>
+        <button id="stopBtn" class="danger" style="display:none">⏹ Stop Task</button>
+      </div>
+      <div class="btnrow" style="width:100%">
+        <input id="textInput" placeholder="…or type a command and press Enter" style="flex:1"/>
+        <button onclick="sendText()">Send ➤</button>
+      </div>
+    </div>
+    <div id="transcript"></div>
+  </section>
+
+  <!-- RIGHT: live agent log -->
+  <aside class="card">
+    <h3>Agent Activity</h3>
+    <div id="log"></div>
+  </aside>
+</main>
+
+<!-- SETTINGS DIALOG -->
+<dialog id="settingsDlg">
+  <h3>Provider & Model Settings</h3>
+  <div class="provlist" id="provList"></div>
+  <label>Model <small>(type any model name even if not listed)</small></label>
+  <input id="modelInput" list="modelList" placeholder="e.g. meta/llama-3.1-70b-instruct"/>
+  <datalist id="modelList"></datalist>
+  <div class="grid2">
+    <div><label>API Key (if needed)</label><input id="keyInput" type="password" placeholder="nvapi-... / sk-..."/></div>
+    <div><label>Base URL override (optional)</label><input id="urlInput" placeholder="https://.../v1"/></div>
+  </div>
+  <div class="btnrow" style="justify-content:flex-start;margin-top:14px">
+    <button class="primary" onclick="saveProvider()">💾 Save & Activate</button>
+    <button onclick="testProvider()">🔌 Test Connection</button>
+    <span id="testResult" style="font-size:12px;color:var(--dim);align-self:center"></span>
+  </div>
+  <hr/>
+  <h3>➕ Add Custom Provider (any OpenAI-compatible endpoint)</h3>
+  <div class="grid2">
+    <div><label>Provider Name</label><input id="cName" placeholder="My vLLM box"/></div>
+    <div><label>Model Name</label><input id="cModel" placeholder="qwen2.5-coder-32b"/></div>
+  </div>
+  <label>Base URL</label><input id="cUrl" placeholder="http://192.168.1.50:8000/v1"/>
+  <label>API Key</label><input id="cKey" type="password" placeholder="optional"/>
+  <div class="btnrow" style="justify-content:flex-start;margin-top:12px">
+    <button class="primary" onclick="addCustom()">Add Provider</button>
+    <button onclick="closeSettings()">Close</button>
+  </div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+.gradle/
+build/
+*.apk
+*.ap_
+*.dex
+*.class
+*.jar
+*.aar
+local.properties
+*.log
+hs_err_pid*
