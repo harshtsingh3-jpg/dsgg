@@ -1,0 +1,17 @@
+{
+  "name": "jarvis-voice-agent",
+  "version": "1.0.0",
+  "description": "Hands-free AI voice agentic assistant: plans, executes, self-heals on failure, and connects to any OpenAI-compatible provider (NVIDIA NIM, OpenRouter, Ollama, custom).",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["ai", "voice", "agent", "assistant", "nvidia-nim", "openrouter", "ollama", "autonomous"],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}

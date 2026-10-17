@@ -1,0 +1,5 @@
+node_modules/
+data/providers.json
+data/memory.json
+*.log
+e2e_out.log
