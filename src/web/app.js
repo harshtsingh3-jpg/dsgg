@@ -1,15 +1,30 @@
 // ============================================================
-// Frontend voice logic: STT (webkitSpeechRecognition), TTS,
+// Frontend voice logic: STT (SpeechRecognition), TTS,
 // wake word ("jarvis"), hands-free chaining, WS event stream.
+// Works in browser AND inside the JARVIS Android APK (where a
+// native VoiceSession object is injected before this script).
 // ============================================================
 const $ = id => document.getElementById(id);
 let ws, selectedProviderId = null;
 
+// ---------- Server base URL ----------
+// In the APK, MainActivity injects window.JARVIS_BASE = "http://<ip>:8787"
+// and window.JARVIS_NATIVE = true before loading the page.
+const BASE = window.JARVIS_BASE || `${location.protocol}//${location.host}`;
+
 // ---------- WebSocket ----------
+let wsFails = 0;
 function connectWS() {
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  ws.onmessage = e => handleAgentEvent(JSON.parse(e.data));
+  const url = BASE.replace(/^http/, 'ws') + '/ws';
+  ws = new WebSocket(url);
+  ws.onmessage = e => { wsFails = 0; handleAgentEvent(JSON.parse(e.data)); };
   ws.onclose = () => setTimeout(connectWS, 1500);
+  ws.onerror = () => {
+    if (++wsFails === 4 && window.JARVIS_NATIVE) {
+      try { VoiceSession && VoiceSession.promptForServer(); } catch {}
+    }
+    try { ws.close(); } catch {}
+  };
 }
 connectWS();
 
@@ -46,7 +61,6 @@ function addLog(type, data) {
 }
 
 // ---------- Agent events ----------
-let speakingQueue = [];
 function handleAgentEvent(ev) {
   const { type, ...data } = ev;
   addLog(type, data);
@@ -71,9 +85,11 @@ function handleAgentEvent(ev) {
 }
 
 // ---------- Text-to-Speech ----------
+// Native (APK): window.VoiceSession.speak(text) uses Android TTS.
+// Browser: Web Speech API.
 let voices = [];
-function loadVoices() { voices = speechSynthesis.getVoices(); }
-speechSynthesis.onvoiceschanged = loadVoices; loadVoices();
+function loadVoices() { if (!window.JARVIS_NATIVE && 'speechSynthesis' in window) voices = speechSynthesis.getVoices(); }
+if ('speechSynthesis' in window) { speechSynthesis.onvoiceschanged = loadVoices; loadVoices(); }
 
 function pickVoice() {
   const pref = JSON.parse(localStorage.getItem('jarvisPrefs') || '{}');
@@ -84,22 +100,34 @@ function pickVoice() {
 }
 function speak(text) {
   if (!text) return;
+  const clean = String(text).replace(/[*_#`]/g, '');
+  if (window.JARVIS_NATIVE && window.VoiceSession) {
+    setOrb('speaking');
+    window.VoiceSession.speak(clean);        // app calls onTTSEnd() when done
+    return;
+  }
+  if (!('speechSynthesis' in window)) { setOrb(''); return; }
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(String(text).replace(/[*_#`]/g, ''));
+  const u = new SpeechSynthesisUtterance(clean);
   const v = pickVoice(); if (v) u.voice = v;
   const prefs = JSON.parse(localStorage.getItem('jarvisPrefs') || '{}');
   u.rate = prefs.rate || 1.03; u.pitch = prefs.pitch || 0.9;
   u.onstart = () => setOrb('speaking');
-  u.onend = u.onerror = () => {
-    if (handsFree && !isBusyNow) startListening(true); // auto re-arm mic after speaking
-    else setOrb(isBusyNow ? 'thinking' : '');
-  };
+  u.onend = u.onerror = () => onSpeakEnd();
   setOrb('speaking');
   speechSynthesis.speak(u);
+}
+// Called from Java when Android TTS finishes
+function onTTSEnd() { onSpeakEnd(); }
+function onSpeakEnd() {
+  if (handsFree && !isBusyNow) startListening(true); // auto re-arm mic after speaking
+  else setOrb(isBusyNow ? 'thinking' : '');
 }
 let isBusyNow = false;
 
 // ---------- Speech-to-Text ----------
+// Native (APK): window.VoiceSession.start()/stop() uses Android SpeechRecognizer.
+// The app calls onNativeSpeech(finalText) with results.
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, handsFree = false, listeningWanted = false;
 
@@ -129,22 +157,35 @@ if (SR) {
   };
   rec.onend = () => { if (listeningWanted) { try { rec.start(); } catch {} } };
   rec.onerror = e => { if (e.error === 'not-allowed') { setStatus('Microphone permission denied.'); listeningWanted = false; } };
-} else {
+} else if (!window.JARVIS_NATIVE) {
   $('micBtn').disabled = true;
-  $('statusLine').textContent = 'Speech recognition not supported in this browser — use Chrome/Edge, or type commands below.';
+  $('statusLine').textContent = 'Speech recognition not supported in this browser — use Chrome/Edge or the JARVIS Android app, or type commands below.';
 }
 let heardWakeThisUtterance = false;
 
+// Native recognizer delivers final transcripts here (called from Java)
+function onNativeSpeech(text) {
+  if (!text) return;
+  setStatus(text);
+  handleCommand(text);
+}
+function onNativeListeningState(on) {
+  if (on) setOrb('listening');
+  else if (!isBusyNow && !window.__speaking) setOrb('');
+}
+
 function startListening(auto = false) {
-  if (!rec) return;
   heardWakeThisUtterance = false;
   listeningWanted = true;
   setOrb('listening');
   setStatus(auto ? 'Listening for your next command…' : 'Speak now…');
+  if (window.JARVIS_NATIVE && window.VoiceSession) { window.VoiceSession.start(); return; }
+  if (!rec) return;
   try { rec.start(); } catch {}
 }
 function stopListening() {
   listeningWanted = false;
+  if (window.JARVIS_NATIVE && window.VoiceSession) window.VoiceSession.stop();
   try { rec && rec.stop(); } catch {}
   setOrb('');
 }
@@ -156,7 +197,7 @@ async function handleCommand(raw) {
   const low = cmd.toLowerCase();
 
   // local control phrases
-  if (/^(stop|cancel|shut up|quiet|be quiet)\b/.test(low)) { send({ type: 'stop' }); speechSynthesis.cancel(); stopListening(); setStatus('Stopped.'); return; }
+  if (/^(stop|cancel|shut up|quiet|be quiet)\b/.test(low)) { send({ type: 'stop' }); haltSpeech(); stopListening(); setStatus('Stopped.'); return; }
   if (/^(go to sleep|sleep|stand down)\b/.test(low)) { setHandsFree(false); stopListening(); speak('Standing by.'); return; }
   if (/^(wake up|are you there|hello jarvis|you there)\b/.test(low)) { speak('At your service. What do you need?'); return; }
 
@@ -165,6 +206,10 @@ async function handleCommand(raw) {
   setOrb('thinking');
   setStatus('On it — planning now…');
   send({ type: 'task', goal: cmd });
+}
+function haltSpeech() {
+  if (window.JARVIS_NATIVE && window.VoiceSession) window.VoiceSession.cancelSpeech();
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
 }
 
 $('micBtn').onclick = () => { listeningWanted ? stopListening() : startListening(); };
@@ -179,7 +224,7 @@ function setHandsFree(on) {
 }
 if (localStorage.getItem('jarvisHF') === '1') setHandsFree(true);
 
-$('stopBtn').onclick = () => { send({ type: 'stop' }); speechSynthesis.cancel(); setStatus('Task stopped.'); };
+$('stopBtn').onclick = () => { send({ type: 'stop' }); haltSpeech(); setStatus('Task stopped.'); };
 
 $('textInput').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.value.trim()) { sendText(); } });
 function sendText() { const v = $('textInput').value.trim(); if (!v) return; $('textInput').value = ''; handleCommand(v); }
@@ -200,7 +245,7 @@ window.handleAgentEvent = ev => {
 // ---------- Settings / Providers ----------
 let providersCache = [];
 async function loadProviders() {
-  const st = await (await fetch('/api/state')).json();
+  const st = await (await fetch(BASE + '/api/state')).json();
   providersCache = st.providers;
   const active = st.providers.find(p => p.id === st.activeProviderId) || st.providers[0];
   $('badgeName').textContent = active?.name || '?';
@@ -233,18 +278,18 @@ async function saveProvider() {
   if (apiKey) patch.apiKey = apiKey;
   if (baseUrl) patch.baseUrl = baseUrl;
   if (selectedProviderId) {
-    if (Object.keys(patch).length) await fetch(`/api/providers/${selectedProviderId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-    await fetch('/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerId: selectedProviderId, model }) });
-    speak && testResultEl('Saved & activated ✓');
+    if (Object.keys(patch).length) await fetch(`${BASE}/api/providers/${selectedProviderId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+    await fetch(BASE + '/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerId: selectedProviderId, model }) });
+    testResultEl('Saved & activated ✓');
     loadProviders(); closeSettings();
   }
 }
 async function addCustom() {
   const body = { name: $('cName').value.trim(), baseUrl: $('cUrl').value.trim(), model: $('cModel').value.trim(), apiKey: $('cKey').value.trim() };
   if (!body.name || !body.baseUrl) { testResultEl('Name and Base URL required', true); return; }
-  const r = await (await fetch('/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  const r = await (await fetch(BASE + '/api/providers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   if (r.error) return testResultEl(r.error, true);
-  await fetch('/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerId: r.id, model: body.model }) });
+  await fetch(BASE + '/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ providerId: r.id, model: body.model }) });
   testResultEl('Custom provider added & activated ✓');
   ['cName','cUrl','cModel','cKey'].forEach(i => $(i).value = '');
   loadProviders();
@@ -253,7 +298,7 @@ async function testProvider() {
   testResultEl('Testing…');
   const prov = providersCache.find(p => p.id === selectedProviderId) || {};
   const body = { baseUrl: $('urlInput').value.trim() || prov.baseUrl, model: $('modelInput').value.trim() || prov.defaultModel, apiKey: $('keyInput').value.trim() || undefined };
-  const r = await (await fetch('/api/test-provider', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  const r = await (await fetch(BASE + '/api/test-provider', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
   testResultEl(r.ok ? `✓ Connected in ${r.ms}ms — replied "${r.reply}"` : `✗ ${r.error}`, !r.ok);
 }
 function testResultEl(t, err) { const el = $('testResult'); el.textContent = t; el.style.color = err ? 'var(--err)' : 'var(--acc)'; }
